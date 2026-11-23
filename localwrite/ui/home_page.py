@@ -14,8 +14,11 @@ from localwrite.config.settings import HOTKEY_LABELS, RECOMMENDED_MODEL
 from localwrite.core.modes import MODE_ORDER, MODES
 from localwrite.ui import theme
 from localwrite.ui.icons import line_icon
+from localwrite.core.errors import AI_ERROR
+from localwrite.core.ollama_updates import DOWNLOAD_PAGE
 from localwrite.ui.widgets import (
-    Card, ModeTile, Spinner, StatusPill, ToggleSwitch, icon_label, keycaps_row, muted_label, set_variant,
+    Card, CommandBox, ModeTile, Spinner, StatusPill, ToggleSwitch, icon_label, keycaps_row, muted_label,
+    set_variant,
 )
 
 if TYPE_CHECKING:
@@ -104,34 +107,58 @@ class HomePage(QWidget):
         head.addLayout(toggle_box)
         lay.addLayout(head)
 
-        # ---------------- offline notice
+        # ---------------- AI error (same short message as every other screen)
         self.offline = QFrame()
-        self.offline.setObjectName("NoticeWarn")
+        self.offline.setObjectName("NoticeError")
         ol = QHBoxLayout(self.offline)
-        ol.setContentsMargins(18, 16, 18, 16)
-        ol.setSpacing(14)
-        ol.addWidget(icon_label("alert", p.warning, 22), 0, Qt.AlignmentFlag.AlignTop)
-        otext = QVBoxLayout()
-        otext.setSpacing(6)
-        self.offline_title = QLabel()
-        self.offline_title.setStyleSheet("font-weight: 700; font-size: 10.5pt; background: transparent;")
-        self.offline_hint = QLabel()
-        self.offline_hint.setWordWrap(True)
-        self.offline_hint.setStyleSheet(f"color: {p.text_soft}; background: transparent;")
-        self.offline_hint.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        obtn = QHBoxLayout()
-        retry = set_variant(QPushButton("Retry connection"), "primary")
+        ol.setContentsMargins(16, 12, 16, 12)
+        ol.setSpacing(12)
+        ol.addWidget(icon_label("alert", p.danger, 20))
+        self.offline_title = QLabel(AI_ERROR)
+        self.offline_title.setObjectName("ErrorTitle")
+        self.offline_title.setStyleSheet("background: transparent;")
+        ol.addWidget(self.offline_title, 1)
+        retry = set_variant(QPushButton("Retry"), "primary")
         retry.clicked.connect(lambda: self.c.refresh_ollama())
-        wiz = QPushButton("Open setup guide")
+        wiz = QPushButton("Setup guide")
         wiz.clicked.connect(self.c.run_setup_wizard)
-        obtn.addWidget(retry)
-        obtn.addWidget(wiz)
-        obtn.addStretch(1)
-        otext.addWidget(self.offline_title)
-        otext.addWidget(self.offline_hint)
-        otext.addLayout(obtn)
-        ol.addLayout(otext, 1)
+        ol.addWidget(retry)
+        ol.addWidget(wiz)
         lay.addWidget(self.offline)
+
+        # ---------------- no models installed (information, not an error)
+        self.no_models = QFrame()
+        self.no_models.setObjectName("NoticeInfo")
+        nl = QVBoxLayout(self.no_models)
+        nl.setContentsMargins(18, 14, 18, 14)
+        nl.setSpacing(8)
+        nt = QLabel(f"<b>No AI model installed yet.</b> Install the recommended model by running this command "
+                    f"in a terminal (optional, about 1.9 GB):")
+        nt.setWordWrap(True)
+        nt.setStyleSheet("background: transparent;")
+        nl.addWidget(nt)
+        nl.addWidget(CommandBox(f"ollama pull {RECOMMENDED_MODEL}", self.c.copy_text))
+        lay.addWidget(self.no_models)
+
+        # ---------------- Ollama update notice (optional, dismissible, never blocks anything)
+        self.update_notice = QFrame()
+        self.update_notice.setObjectName("NoticeInfo")
+        ul = QHBoxLayout(self.update_notice)
+        ul.setContentsMargins(16, 12, 16, 12)
+        ul.setSpacing(12)
+        ul.addWidget(icon_label("refresh", p.accent, 20))
+        self.update_text = QLabel()
+        self.update_text.setWordWrap(True)
+        self.update_text.setStyleSheet("background: transparent;")
+        ul.addWidget(self.update_text, 1)
+        get_it = QPushButton("Official installer")
+        get_it.setToolTip(DOWNLOAD_PAGE)
+        get_it.clicked.connect(self._open_download_page)
+        dismiss = set_variant(QPushButton("Dismiss"), "ghost")
+        dismiss.clicked.connect(self.c.dismiss_ollama_update)
+        ul.addWidget(get_it)
+        ul.addWidget(dismiss)
+        lay.addWidget(self.update_notice)
 
         # ---------------- status cards
         grid = ResponsiveGrid(min_col=250, max_cols=3)
@@ -165,9 +192,25 @@ class HomePage(QWidget):
         refresh.clicked.connect(lambda: self.c.refresh_ollama())
         mrow.addWidget(self.model_combo, 1)
         mrow.addWidget(refresh)
+        self.active_model = QLabel()
+        self.active_model.setStyleSheet(f"color: {p.text_soft};")
         self.model_detail = muted_label(small=True)
+        mc.body.addWidget(self.active_model)
         mc.body.addLayout(mrow)
         mc.body.addWidget(self.model_detail)
+        # Optional recommendation: better grammar quality, same size class. Never auto-installed.
+        self.rec_box = QWidget()
+        rb = QVBoxLayout(self.rec_box)
+        rb.setContentsMargins(0, 4, 0, 0)
+        rb.setSpacing(6)
+        self.rec_text = muted_label(small=True)
+        self.rec_cmd = CommandBox(f"ollama pull {RECOMMENDED_MODEL}", self.c.copy_text)
+        self.rec_use = QPushButton(f"Use {RECOMMENDED_MODEL}")
+        self.rec_use.clicked.connect(lambda: self.c.set_model(RECOMMENDED_MODEL))
+        rb.addWidget(self.rec_text)
+        rb.addWidget(self.rec_cmd)
+        rb.addWidget(self.rec_use, 0, Qt.AlignmentFlag.AlignLeft)
+        mc.body.addWidget(self.rec_box)
         mc.body.addStretch(1)
         grid.add(mc)
 
@@ -254,7 +297,7 @@ class HomePage(QWidget):
             self.engine_pill.set_state("busy", "Connecting...")
             self.engine_detail.setText(s.ollama_url)
         elif st.state == "error":
-            self.engine_pill.set_state("error", "Not connected")
+            self.engine_pill.set_state("error", AI_ERROR)
             self.engine_detail.setText(s.ollama_url)
         else:
             self.engine_pill.set_state("unknown", "Unknown")
@@ -266,25 +309,18 @@ class HomePage(QWidget):
             self.engine_detail.setText(message)
             self.engine_detail.setStyleSheet(f"color: {p.success if ok else p.danger};")
 
-        # Offline / no-model notice
-        if st.state == "error":
-            self.offline.show()
-            self.offline_title.setText("LocalWrite can't reach Ollama")
-            self.offline_hint.setText(
-                "Ollama runs the AI on your computer. To fix this:\n"
-                "1. Start Ollama from the Start menu (a llama icon appears near the clock), or run 'ollama serve'.\n"
-                "2. Not installed yet? Download it free from ollama.com/download/windows.\n"
-                f"3. Check the server address in Settings (currently {s.ollama_url})."
+        # Notices
+        installed = [m.name for m in st.models if not m.is_embedding_model]
+        self.offline.setVisible(st.state == "error")
+        self.no_models.setVisible(st.state == "ok" and not installed)
+        upd = self.c.ollama_update
+        show_update = bool(upd) and st.state == "ok" and upd.latest != s.dismissed_ollama_update
+        self.update_notice.setVisible(show_update)
+        if show_update:
+            self.update_text.setText(
+                f"<b>Ollama {upd.latest} is available</b> (you have {upd.installed}). Update it from the Ollama "
+                "icon in the system tray, or download the official installer. LocalWrite never updates it for you."
             )
-        elif st.state == "ok" and not [m for m in st.models if not m.is_embedding_model]:
-            self.offline.show()
-            self.offline_title.setText("No AI model installed yet")
-            self.offline_hint.setText(
-                f"Install a lightweight model by running:  ollama pull {RECOMMENDED_MODEL}\n"
-                "or open the setup guide to download one (it asks for your permission first)."
-            )
-        else:
-            self.offline.hide()
 
         # Model combo
         self.model_combo.blockSignals(True)
@@ -298,18 +334,27 @@ class HomePage(QWidget):
             self.model_combo.addItem("No models found", "")
         self.model_combo.setCurrentIndex(max(0, self.model_combo.findData(s.model)))
         self.model_combo.blockSignals(False)
+        self.active_model.setText(f"Active model: <b>{s.model}</b>" if s.model else "No model selected yet")
         info = next((m for m in st.models if m.name == s.model), None)
         self.model_detail.setStyleSheet("")
         if not s.model:
-            self.model_detail.setText(f"Choose a model. Recommended for most PCs: {RECOMMENDED_MODEL}")
+            self.model_detail.setText("Choose one of your installed models above.")
         elif info:
             bits = [b for b in (info.parameter_size, info.size_label) if b]
-            self.model_detail.setText(" · ".join(bits) + " · runs locally")
+            self.model_detail.setText(" \u00b7 ".join(bits) + " \u00b7 runs locally")
         elif st.state == "ok":
-            self.model_detail.setText(f"'{s.model}' is not installed. Install it with: ollama pull {s.model}")
+            self.model_detail.setText(f"'{s.model}' is not installed in Ollama. Choose an installed model above.")
             self.model_detail.setStyleSheet(f"color: {p.warning};")
         else:
             self.model_detail.setText("")
+        rec_installed = RECOMMENDED_MODEL in installed
+        self.rec_box.setVisible(st.state == "ok" and bool(installed) and s.model != RECOMMENDED_MODEL)
+        self.rec_cmd.setVisible(not rec_installed)
+        self.rec_use.setVisible(rec_installed)
+        self.rec_text.setText(
+            f"Tip: {RECOMMENDED_MODEL} is installed and is often better at grammar." if rec_installed else
+            f"Tip: {RECOMMENDED_MODEL} is often better at grammar. Optional - install it with:"
+        )
 
         # Quick start keys
         while self.start_keys_lay.count():
@@ -350,6 +395,11 @@ class HomePage(QWidget):
         name = self.model_combo.currentData()
         if name:
             self.c.set_model(name)
+
+    def _open_download_page(self) -> None:
+        import webbrowser
+
+        webbrowser.open(DOWNLOAD_PAGE)
 
     def _test_connection(self) -> None:
         self.test_btn.setEnabled(False)

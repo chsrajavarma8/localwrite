@@ -219,6 +219,15 @@ class SettingsPage(QWidget):
             self.context.addItem(f"{n:,} tokens", n)
         s.add(SettingRow("Context window", "Larger handles longer text in one pass but uses more memory.",
                          self.context, control_width=CONTROL_W))
+        self.update_status = muted_label(small=True)
+        s.add(SettingRow("Ollama updates", "LocalWrite never updates Ollama itself. Update it from the Ollama icon "
+                                           "in the system tray or with the official installer.", self.update_status,
+                         control_width=CONTROL_W))
+        self.check_online = _toggle()
+        s.add(SettingRow("Check online for Ollama updates (optional)",
+                         "Off by default. Asks GitHub for the latest Ollama version number. Nothing about you or "
+                         "your writing is sent. Without it, LocalWrite still notices updates Ollama has announced "
+                         "on this PC.", self.check_online))
         lay.addWidget(s)
 
         # ---------------- Writing
@@ -286,8 +295,8 @@ class SettingsPage(QWidget):
         # ---------------- System
         s = Section("Windows integration", "window")
         self.start_with_windows = _toggle()
-        s.add(SettingRow("Launch on Windows startup", "Start LocalWrite automatically when you sign in.",
-                         self.start_with_windows))
+        s.add(SettingRow("Start with Windows", "Off by default. When on, LocalWrite starts quietly in the system "
+                                               "tray when you sign in to Windows.", self.start_with_windows))
         self.start_minimized = _toggle()
         s.add(SettingRow("Start in the system tray", "Don't open the main window at startup.", self.start_minimized))
         self.minimize_to_tray = _toggle()
@@ -353,6 +362,7 @@ class SettingsPage(QWidget):
         outer.addWidget(bar)
 
         self.c.status_changed.connect(self._fill_models)
+        self.c.status_changed.connect(self._update_update_status)
         self.load()
 
     # ------------------------------------------------------------------ load / save
@@ -387,6 +397,8 @@ class SettingsPage(QWidget):
         self.notifications.setChecked(s.show_notifications)
         self.realtime.setChecked(s.realtime_enabled)
         self.excluded.setText(", ".join(s.realtime_excluded_apps))
+        self.check_online.setChecked(s.check_ollama_updates_online)
+        self._update_update_status()
         self.save_status.setText("")
         self.save_status.setStyleSheet("")
         self._update_url_warning()
@@ -415,6 +427,7 @@ class SettingsPage(QWidget):
             close_to_tray=self.close_to_tray.isChecked(),
             show_notifications=self.notifications.isChecked(),
             realtime_enabled=self.realtime.isChecked(),
+            check_ollama_updates_online=self.check_online.isChecked(),
             realtime_excluded_apps=[a.strip() for a in self.excluded.text().split(",") if a.strip()],
         )
 
@@ -457,6 +470,17 @@ class SettingsPage(QWidget):
             self.model.addItem(current)
         self.model.setCurrentText(current or "")
         self.model.blockSignals(False)
+
+    def _update_update_status(self) -> None:
+        st = self.c.ollama_status
+        upd = self.c.ollama_update
+        if st.state != "ok":
+            text = "Unknown until Ollama is connected"
+        elif upd:
+            text = f"Ollama {upd.latest} is available (you have {upd.installed})"
+        else:
+            text = f"No update found (you have {st.version})"
+        self.update_status.setText(text)
 
     def _update_url_warning(self) -> None:
         if not self.c.settings.is_local_server():

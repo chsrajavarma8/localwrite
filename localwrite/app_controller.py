@@ -17,9 +17,11 @@ from localwrite.config.settings import HOTKEY_MODES, Settings, SettingsStore
 from localwrite.core.cancel import CancelToken
 from localwrite.core.correction_engine import CorrectionEngine, CorrectionResult
 from localwrite.core.diff import change_count, compute_diff
+from localwrite.core.errors import AI_ERROR, report_ai_error
+from localwrite.core.ollama_updates import UpdateInfo, check_for_update
 from localwrite.core.modes import MODES
 from localwrite.core.ollama_client import (
-    TROUBLESHOOTING, OllamaCancelledError, OllamaClient, OllamaConnectionError, OllamaError,
+    OllamaCancelledError, OllamaClient, OllamaConnectionError, OllamaError,
 )
 from localwrite.realtime import RealtimeAssistant
 from localwrite.ui import theme
@@ -75,6 +77,8 @@ class AppController(QObject):
         self.quitting = False
         self.busy = False
         self.ollama_status = OllamaStatus()
+        self.ollama_update: UpdateInfo | None = None
+        self._update_checked: tuple[str, bool, float] | None = None  # (version, online, when)
         self.hotkey_errors: dict[str, str | None] = {}
         self._suspend_count = 0
         self._session: Session | None = None
@@ -118,11 +122,7 @@ class AppController(QObject):
         if failed:
             self.notify("Some shortcuts are unavailable",
                         "; ".join(failed.values()) + ". Change them in Settings.", error=True)
-        try:
-            if startup.is_enabled() != self.settings.start_with_windows:
-                startup.set_enabled(self.settings.start_with_windows)
-        except OSError:
-            log.warning("Could not sync the start-with-Windows registry entry")
+        self._startup_initial_sync()
         self.realtime.set_enabled(self.settings.realtime_enabled and self.settings.assistant_enabled)
         self.refresh_ollama()
         self._status_timer.start()
@@ -193,10 +193,13 @@ class AppController(QObject):
         if new.hotkeys != old.hotkeys or new.assistant_enabled != old.assistant_enabled:
             errors = self._register_hotkeys()
         if new.start_with_windows != old.start_with_windows:
-            try:
-                startup.set_enabled(new.start_with_windows)
-            except OSError:
-                self.notify("Startup setting failed", "Couldn't update the Windows startup entry.", error=True)
+            actual = startup.sync(new.start_with_windows)
+            if actual != new.start_with_windows:
+                new = self._store_startup_state(actual)
+                self.notify("Start with Windows", "Windows didn't accept the startup change. Please try again.",
+                            error=True)
+        if new.check_ollama_updates_online != old.check_ollama_updates_online:
+            self.check_ollama_update(force=True)
         if (new.realtime_enabled, new.assistant_enabled) != (old.realtime_enabled, old.assistant_enabled):
             self.realtime.set_enabled(new.realtime_enabled and new.assistant_enabled)
         if new.ollama_url != old.ollama_url:
@@ -204,6 +207,65 @@ class AppController(QObject):
         self.settings_changed.emit()
         self.status_changed.emit()
         return errors
+
+    # ================================================================== Windows startup
+    def _store_startup_state(self, actual: bool) -> Settings:
+        """Record the real startup state in the settings (the setting must never lie)."""
+        if actual != self.settings.start_with_windows:
+            self.settings = self.settings.copy(start_with_windows=actual)
+            try:
+                self.store.save(self.settings)
+            except OSError:
+                log.warning("Saving the startup state failed")
+        return self.settings
+
+    def _startup_initial_sync(self) -> None:
+        """At launch: respect the user's choices, repair a stale path, never add an unwanted entry."""
+        try:
+            if self.settings.start_with_windows:
+                actual = startup.is_enabled()  # False if the user disabled us in Task Manager
+                if actual and not startup.is_current():
+                    startup.set_enabled(True)  # the app was moved: point the entry at this copy
+            else:
+                if startup.registered_command() is not None:
+                    startup.set_enabled(False)  # off by default and whenever the setting is off
+                actual = False
+        except startup.StartupError:
+            log.warning("Could not sync the Windows startup entry")
+            actual = startup.is_enabled()
+        self._store_startup_state(actual)
+
+    def refresh_startup_state(self) -> None:
+        """Re-read the real startup state (e.g. after changes in Task Manager) without changing it."""
+        before = self.settings.start_with_windows
+        self._store_startup_state(startup.is_enabled())
+        if self.settings.start_with_windows != before:
+            self.settings_changed.emit()
+
+    # ================================================================== Ollama updates
+    def check_ollama_update(self, force: bool = False) -> None:
+        """Look for a newer Ollama in the background. Local log check always; online only if opted in."""
+        version = self.ollama_status.version
+        if self.ollama_status.state != "ok" or not version:
+            return
+        online = self.settings.check_ollama_updates_online
+        now = time.monotonic()
+        last = self._update_checked
+        if not force and last and last[0] == version and last[1] == online and now - last[2] < 3600:
+            return
+        self._update_checked = (version, online, now)
+
+        def done(info) -> None:
+            if info != self.ollama_update:
+                self.ollama_update = info
+                self.status_changed.emit()
+
+        run_background(self.invoker, lambda: check_for_update(version, online=online), done,
+                       lambda _exc: None, name="LocalWriteUpdateCheck")
+
+    def dismiss_ollama_update(self) -> None:
+        if self.ollama_update:
+            self.apply_settings(self.settings.copy(dismissed_ollama_update=self.ollama_update.latest))
 
     def set_enabled(self, enabled: bool) -> None:
         if enabled == self.settings.assistant_enabled:
@@ -355,7 +417,7 @@ class AppController(QObject):
     def _run_correction(self, sess: Session, temperature_boost: float = 0.0) -> None:
         s = self.settings
         if not s.model:
-            self.popup.show_error("AI error")
+            self.popup.show_error(report_ai_error(None, "no model selected"))
             return
         if sess.cancel:
             sess.cancel.cancel()
@@ -415,12 +477,10 @@ class AppController(QObject):
         if isinstance(exc, OllamaCancelledError):
             return  # cancel_correction() already updated the popup
         if not isinstance(exc, OllamaError):
-            log.error("Correction failed", exc_info=exc)
-        else:
-            log.warning("AI error: %s", type(exc).__name__)  # type only, never text
-            if isinstance(exc, OllamaConnectionError):
-                self.refresh_ollama(quiet=True)
-        self.popup.show_error("AI error")
+            log.error("Correction failed unexpectedly", exc_info=exc)
+        elif isinstance(exc, OllamaConnectionError):
+            self.refresh_ollama(quiet=True)
+        self.popup.show_error(report_ai_error(exc, "popup"))
 
     # ================================================================== popup actions
     def accept_correction(self) -> None:
@@ -541,8 +601,7 @@ class AppController(QObject):
         """Correct text typed in the Writing Assistant. Returns a token to cancel the request."""
         engine = self.make_engine()
         if not engine.model:
-            on_done(None, OllamaError("No AI model selected",
-                                      hint="Choose a model on the Home page or in Settings."))
+            on_done(None, OllamaError(report_ai_error(None, "no model selected")))
             return None
         token = CancelToken()
         self._set_busy(True)
@@ -560,6 +619,7 @@ class AppController(QObject):
         def bad(exc) -> None:
             self._set_busy(False)
             if not token.cancelled:
+                report_ai_error(exc, "writing assistant")
                 on_done(None, exc)
 
         run_background(self.invoker, lambda: engine.correct(text, mode, instruction, on_progress=progress,
@@ -568,7 +628,7 @@ class AppController(QObject):
 
     def test_model(self, model: str, done, url: str | None = None) -> None:
         if not model:
-            done(False, "Choose a model first.")
+            done(False, report_ai_error(None, "no model selected"))
             return
         engine = self.make_engine(model=model, url=url)
         engine.timeout = max(120, engine.timeout)
@@ -578,10 +638,7 @@ class AppController(QObject):
             self.refresh_ollama(quiet=True)
 
         def bad(exc) -> None:
-            if isinstance(exc, OllamaError):
-                done(False, f"{exc.title}. {exc.hint.splitlines()[0] if exc.hint else ''}")
-            else:
-                done(False, str(exc))
+            done(False, report_ai_error(exc, "model test"))
 
         run_background(self.invoker, lambda: engine.correct(TEST_SENTENCE, "grammar"), ok, bad)
 
@@ -595,7 +652,7 @@ class AppController(QObject):
             done(True, f"Connected to Ollama {version} · {len(models)} model(s) installed")
 
         def bad(exc) -> None:
-            done(False, getattr(exc, "title", str(exc)))
+            done(False, report_ai_error(exc, "connection test"))
 
         run_background(self.invoker, work, ok, bad)
 
@@ -607,8 +664,7 @@ class AppController(QObject):
                 self.notify("Ollama is running",
                             f"Version {st.version} \u00b7 {len(st.models)} model(s) \u00b7 using {model}", force=True)
             else:
-                self.notify("Ollama is not reachable", "Start Ollama from the Start menu, then try again.",
-                            error=True)
+                self.notify("LocalWrite", AI_ERROR, error=True)
 
         self.refresh_ollama(then=report)
 
@@ -626,13 +682,14 @@ class AppController(QObject):
             version, models = res
             self.ollama_status = OllamaStatus("ok", version, models)
             self.status_changed.emit()
+            self.check_ollama_update()
             if then:
                 then()
 
         def bad(exc) -> None:
-            title = getattr(exc, "title", "Ollama is not available")
-            hint = getattr(exc, "hint", "") or TROUBLESHOOTING
-            self.ollama_status = OllamaStatus("error", "", [], title, hint)
+            if not quiet:
+                report_ai_error(exc, "status check")
+            self.ollama_status = OllamaStatus("error", "", [], AI_ERROR, "")
             self.status_changed.emit()
             if then:
                 then()

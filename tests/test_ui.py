@@ -181,6 +181,81 @@ def test_engine_failure_shows_only_ai_error(app, controller, monkeypatch):
     assert popup.retry_btn.isEnabled()
 
 
+def test_model_change_is_used_for_next_request(app, controller):
+    controller.set_model("qwen2.5:3b")
+    assert controller.make_engine().model == "qwen2.5:3b"
+    assert controller.store.load().model == "qwen2.5:3b"  # restored on next launch
+    controller.set_model("llama3.2:3b")
+    assert controller.make_engine().model == "llama3.2:3b"
+
+
+def test_home_model_card_recommendation(app, controller):
+    from localwrite.core.ollama_client import ModelInfo
+
+    home = controller.main_window.pages["home"]
+    controller.apply_settings(controller.settings.copy(model="llama3.2:3b"))
+    controller.ollama_status = type(controller.ollama_status)("ok", "0.40.15", [ModelInfo("llama3.2:3b")])
+    controller.status_changed.emit()
+    assert "llama3.2:3b" in home.active_model.text()
+    assert not home.rec_box.isHidden() and not home.rec_cmd.isHidden()  # qwen not installed: show command
+    assert home.rec_cmd.field.text() == "ollama pull qwen2.5:3b"
+    controller.ollama_status = type(controller.ollama_status)(
+        "ok", "0.40.15", [ModelInfo("llama3.2:3b"), ModelInfo("qwen2.5:3b")])
+    controller.status_changed.emit()
+    assert home.rec_cmd.isHidden() and not home.rec_use.isHidden()  # installed: offer to switch
+    home.rec_use.click()
+    assert controller.settings.model == "qwen2.5:3b"
+    assert home.rec_box.isHidden()
+    # Empty model list: friendly info notice, no crash
+    controller.ollama_status = type(controller.ollama_status)("ok", "0.40.15", [])
+    controller.status_changed.emit()
+    assert not home.no_models.isHidden()
+
+
+def test_ai_error_is_identical_everywhere(app, controller, monkeypatch):
+    from localwrite.core.errors import AI_ERROR
+    from localwrite.core.ollama_client import OllamaTimeoutError
+
+    class Failing:
+        model = "fake-model"
+
+        def correct(self, *a, **k):
+            raise OllamaTimeoutError("The model took too long", "No answer in 90s", "Try a smaller model")
+
+    monkeypatch.setattr(controller, "make_engine", lambda *a, **k: Failing())
+    # Writing Assistant
+    page = controller.main_window.pages["assistant"]
+    page.editor.setPlainText("some text")
+    page._run()
+    assert pump(app, 3, until=lambda: not page.error_label.isHidden())
+    assert page.error_label.label.text() == AI_ERROR
+    assert page.result_view.isHidden()
+    # Home page when Ollama is unreachable
+    controller.ollama_status = type(controller.ollama_status)("error", "", [], AI_ERROR, "")
+    controller.status_changed.emit()
+    home = controller.main_window.pages["home"]
+    assert not home.offline.isHidden() and home.offline_title.text() == AI_ERROR
+    # Test buttons (Home/Settings) report the same message
+    got = []
+    controller.test_connection("http://127.0.0.1:9", lambda ok, msg: got.append((ok, msg)))
+    assert pump(app, 8, until=lambda: got)
+    assert got[0] == (False, AI_ERROR)
+
+
+def test_update_notice_and_dismiss(app, controller):
+    from localwrite.core.ollama_updates import UpdateInfo
+
+    home = controller.main_window.pages["home"]
+    controller.ollama_status = type(controller.ollama_status)("ok", "0.40.15", [])
+    controller.ollama_update = UpdateInfo("0.40.15", "0.40.17", "local")
+    controller.status_changed.emit()
+    assert not home.update_notice.isHidden()
+    assert "0.40.17" in home.update_text.text()
+    controller.dismiss_ollama_update()
+    assert home.update_notice.isHidden()
+    assert controller.settings.dismissed_ollama_update == "0.40.17"
+
+
 def test_icons_render(app, tmp_path):
     from localwrite.ui.icons import line_icon, render_app_icon, write_ico
 

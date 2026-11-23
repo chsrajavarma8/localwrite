@@ -18,7 +18,8 @@ from localwrite.core.diff import change_count, compute_diff, plain_html, render_
 from localwrite.core.modes import MODE_ORDER, MODES
 from localwrite.ui import theme
 from localwrite.ui.icons import line_icon
-from localwrite.ui.widgets import Card, FlowLayout, Spinner, muted_label, set_variant
+from localwrite.core.ollama_client import OllamaCancelledError
+from localwrite.ui.widgets import Card, ErrorBanner, FlowLayout, Spinner, muted_label, set_variant
 
 if TYPE_CHECKING:
     from localwrite.app_controller import AppController
@@ -133,8 +134,8 @@ class AssistantPage(QWidget):
         self.result_view.setFrameShape(QFrame.Shape.NoFrame)
         self.result_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.result_card.body.addWidget(self.result_view)
-        self.error_label = QLabel()
-        self.error_label.setWordWrap(True)
+        self.error_label = ErrorBanner()
+        self.error_label.hide()
         self.result_card.body.addWidget(self.error_label)
         arow = QHBoxLayout()
         self.copy_btn = set_variant(QPushButton("  Copy corrected text"), "primary")
@@ -211,6 +212,9 @@ class AssistantPage(QWidget):
         self.result_chip.style().polish(self.result_chip)
         self.result_meta.setText("")
         self.result_view.setHtml("")
+        self.result_view.show()
+        self.result_chip.show()
+        self.show_changes.show()
         self.error_label.hide()
         self.copied.setText("")
         self.copy_btn.setEnabled(False)
@@ -225,14 +229,13 @@ class AssistantPage(QWidget):
             self._token = None
             self._busy(False)
             if error is not None:
-                if getattr(error, "title", "") == "Cancelled":
+                if isinstance(error, OllamaCancelledError):
                     self.result_card.hide()
                     return
-                self.result_chip.setText("Couldn't correct")
-                self.result_view.setHtml("")
-                hint = getattr(error, "hint", "") or "Please try again."
-                title = getattr(error, "title", "Something went wrong")
-                self.error_label.setText(f"<b>{title}</b><br>{hint.replace(chr(10), '<br>')}")
+                # Same error state as the popup and every other screen: just "AI error".
+                self.result_chip.hide()
+                self.result_view.hide()
+                self.show_changes.hide()
                 self.error_label.show()
                 return
             self._result = result

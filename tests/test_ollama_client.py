@@ -121,6 +121,22 @@ def test_localhost_is_requested_via_ipv4():
     assert c._url("/api/tags") == "http://127.0.0.1:11434/api/tags"
 
 
+@pytest.mark.ollama
+def test_selected_model_reaches_real_ollama():
+    """The model chosen in the UI is the one sent to Ollama."""
+    import os
+
+    from localwrite.core.correction_engine import CorrectionEngine
+
+    client = OllamaClient("http://localhost:11434")
+    model = os.environ.get("LOCALWRITE_TEST_MODEL", "llama3.2:3b")
+    engine = CorrectionEngine(client, model, timeout=180)
+    assert engine.correct("i has a apple", "grammar").corrected.strip()
+    engine.model = "localwrite-missing-model:1b"
+    with pytest.raises(OllamaModelNotFoundError):
+        engine.correct("i has a apple", "grammar")
+
+
 def test_connection_refused():
     c = OllamaClient("http://127.0.0.1:9", connect_timeout=0.5)
     assert not c.is_running()

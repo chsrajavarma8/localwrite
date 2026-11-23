@@ -124,6 +124,7 @@ class MainWindow(QMainWindow):
             btn.setChecked(k == key)
             btn.setIcon(line_icon(self._nav_icons[k], p.accent if k == key else p.muted, 18))
         if key == "settings":
+            self.c.refresh_startup_state()  # show the real Windows startup state
             self.pages["settings"].load()
         if key == "assistant":
             QTimer.singleShot(0, self.pages["assistant"].focus_editor)

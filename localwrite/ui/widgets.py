@@ -225,6 +225,56 @@ class ToggleSwitch(QAbstractButton):
         p.drawEllipse(QRectF(x, 3, d, d))
 
 
+class ErrorBanner(QFrame):
+    """The app-wide AI error state: an alert icon and the short message, nothing else."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        from localwrite.core.errors import AI_ERROR
+
+        super().__init__(parent)
+        self.setObjectName("NoticeError")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(10)
+        lay.addWidget(icon_label("alert", theme.current().danger, 18))
+        self.label = QLabel(AI_ERROR)
+        self.label.setObjectName("ErrorTitle")
+        self.label.setStyleSheet("background: transparent;")
+        lay.addWidget(self.label, 1)
+
+
+class CommandBox(QWidget):
+    """A read-only shell command with a Copy button (e.g. 'ollama pull qwen2.5:3b')."""
+
+    def __init__(self, command: str, copy_fn, parent: QWidget | None = None) -> None:
+        from PySide6.QtWidgets import QPushButton
+
+        super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        p = theme.current()
+        # A selectable label (not a line edit) so the whole command is always visible.
+        self.field = QLabel(command)
+        self.field.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.field.setStyleSheet(
+            f'font-family: "Cascadia Mono", Consolas, monospace; font-size: 9pt; color: {p.text}; '
+            f"background: {p.surface_alt}; border: 1px solid {p.border}; border-radius: 8px; padding: 6px 9px;"
+        )
+        self.button = QPushButton("Copy")
+        self.button.setToolTip("Copy the command, then paste it into a terminal")
+        self.button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._copy_fn = copy_fn
+        self.button.clicked.connect(self._copy)
+        lay.addWidget(self.field, 1)
+        lay.addWidget(self.button)
+
+    def _copy(self) -> None:
+        if self._copy_fn(self.field.text()):
+            self.button.setText("Copied")
+            QTimer.singleShot(1800, lambda: self.button.setText("Copy"))
+
+
 class SettingRow(QWidget):
     """Title + description on the left, a control on the right (or below when stacked)."""
 

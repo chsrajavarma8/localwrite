@@ -59,6 +59,7 @@ _BOOL_FIELDS = (
     "assistant_enabled", "start_with_windows", "start_minimized", "minimize_to_tray",
     "close_to_tray", "show_notifications", "close_popup_after_replace",
     "restore_clipboard", "verify_before_replace", "realtime_enabled", "first_run_complete",
+    "check_ollama_updates_online",
 )
 
 
@@ -94,6 +95,9 @@ class Settings:
     # Real-time assistance (advanced, off by default)
     realtime_enabled: bool = False
     realtime_excluded_apps: list = field(default_factory=lambda: list(DEFAULT_EXCLUDED_APPS))
+    # Ollama update notice: the local check is always on (offline); the online check is opt-in.
+    check_ollama_updates_online: bool = False
+    dismissed_ollama_update: str = ""
     # Internal
     first_run_complete: bool = False
 
@@ -124,6 +128,7 @@ class Settings:
             setattr(s, name, bool(getattr(s, name)))
         s.clipboard_restore_delay_ms = _clamp_int(s.clipboard_restore_delay_ms, 100, 5000, 600)
         s.copy_timeout_ms = _clamp_int(s.copy_timeout_ms, 200, 5000, 900)
+        s.dismissed_ollama_update = str(s.dismissed_ollama_update or "")[:32]
         if isinstance(s.realtime_excluded_apps, (list, tuple)):
             s.realtime_excluded_apps = sorted(
                 {str(a).strip().lower() for a in s.realtime_excluded_apps if str(a).strip()}

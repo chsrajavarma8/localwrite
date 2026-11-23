@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from localwrite.config.settings import RECOMMENDED_MODEL
 from localwrite.core.cancel import CancelToken
 from localwrite.core.correction_engine import CorrectionEngine
+from localwrite.core.errors import report_ai_error
 from localwrite.core.ollama_client import (
     OLLAMA_DOWNLOAD_URL, OllamaClient, OllamaError, find_ollama_executable, iter_recommended_models, start_ollama,
 )
@@ -358,9 +359,7 @@ class TestPage(QWizardPage):
         def failed(exc) -> None:
             self.spinner.stop()
             self.run_btn.setEnabled(True)
-            title = exc.title if isinstance(exc, OllamaError) else str(exc)
-            hint = exc.hint if isinstance(exc, OllamaError) else ""
-            self.result.setText(_bad(title) + (f"<br>{hint}" if hint else ""))
+            self.result.setText(_bad(report_ai_error(exc, "setup test")))
             self.completeChanged.emit()
 
         run_background(self.wiz.c.invoker, work, done, failed)

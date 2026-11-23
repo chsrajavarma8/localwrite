@@ -85,8 +85,9 @@ class AboutPage(QWidget):
 
         tr = Card("Troubleshooting", "info")
         tr.body.addWidget(_rich(
-            "<p><b>LocalWrite can't reach Ollama</b><br>Start Ollama from the Start menu or run "
-            "<code>ollama serve</code>. Download it free from "
+            "<p><b>“AI error”</b><br>The local AI didn't answer. Make sure Ollama is running (start it from the "
+            "Start menu or run <code>ollama serve</code>) and that the selected model is installed, then press "
+            "Retry. A lighter model helps if requests time out. Download Ollama free from "
             "<a style='color:#2f6bff; text-decoration:none' href='https://ollama.com/download/windows'>ollama.com/download/windows</a>.</p>"
             "<p><b>“No text selected”</b><br>Highlight the text first. For slow apps, increase "
             "<i>Wait for selected text</i> in Settings.</p>"
