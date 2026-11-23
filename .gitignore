@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build output (PyInstaller)
+build/
+dist/
+*.exe
+*.manifest
+*.pkg
+*.toc
+warn-*.txt
+xref-*.html
+
+# Logs and temporary files
+*.log
+logs/
+*.tmp
+*.temp
+*.bak
+*.swp
+~$*
+.DS_Store
+Thumbs.db
+
+# Local user data / configuration (never commit)
+settings.json
+settings.json.bak
+*.db
+*.db-*
+*.sqlite
+.env
+.env.*
+.vscode/
+.idea/
+*.local
+scratch/
